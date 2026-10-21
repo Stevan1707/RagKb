@@ -53,6 +53,18 @@ class Settings(BaseSettings):
             f"@{self.db_host}:{self.db_port}/{self.db_name}?charset=utf8mb4"
         )
 
+    @property
+    def upload_path(self) -> Path:
+        """上传目录绝对路径；.env 里写相对路径时以 backend/ 为基准"""
+        p = Path(self.upload_dir)
+        return p if p.is_absolute() else ROOT_DIR / p
+
+    @property
+    def faiss_index_file(self) -> Path:
+        """FAISS 索引文件绝对路径；.env 里写相对路径时以 backend/ 为基准"""
+        p = Path(self.faiss_index_path)
+        return p if p.is_absolute() else ROOT_DIR / p
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
