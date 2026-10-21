@@ -27,6 +27,9 @@ def create_app() -> FastAPI:
 
 app = create_app()
 
+@app.get("/")
+async def hello():
+    return {"msg": "helloworld"}
 
 if __name__ == "__main__":
     import uvicorn
