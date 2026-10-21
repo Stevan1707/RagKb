@@ -4,3 +4,7 @@ pydantic>=2.8.0
 pydantic-settings>=2.4.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
+
+sqlalchemy[asyncio]>=2.0.30
+aiomysql>=0.2.0
+cryptography>=42.0.0
