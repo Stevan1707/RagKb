@@ -65,6 +65,13 @@ class Settings(BaseSettings):
         p = Path(self.faiss_index_path)
         return p if p.is_absolute() else ROOT_DIR / p
 
+    @property
+    def embed_model_ref(self) -> str:
+        """优先用本地模型目录（离线可用），不存在时才回退到 HuggingFace 模型名。"""
+        p = Path(self.embed_model)
+        candidate = p if p.is_absolute() else ROOT_DIR / p
+        return str(candidate) if candidate.exists() else self.embed_model
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
