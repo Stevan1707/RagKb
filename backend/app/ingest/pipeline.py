@@ -13,7 +13,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from sqlalchemy import delete, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -97,6 +97,63 @@ async def _ingest(src: Path, db: AsyncSession) -> dict:
         )
         await db.commit()
         raise
+
+
+async def remove_document(
+    doc_id: int,
+    remove_file: bool = True,
+    db: AsyncSession | None = None,
+) -> dict | None:
+    """删除一个文档：FAISS 向量 → MySQL 行 → 磁盘文件。
+
+    返回 {"doc_id", "chunks", "vectors", "file_removed"}；文档不存在返回 None。
+    db 为空时自建会话（API 直接调），也可以把当前会话传进来复用。
+
+    顺序不能反：向量先删。数据库行一删，chunk.id 就再也查不出来，
+    FAISS 里会留下永远搜不到、也删不掉的孤儿向量。
+    """
+    if db is not None:
+        return await _remove(db, doc_id, remove_file)
+    async with AsyncSessionLocal() as session:
+        return await _remove(session, doc_id, remove_file)
+
+
+async def _remove(db: AsyncSession, doc_id: int, remove_file: bool) -> dict | None:
+    doc = await db.get(Document, doc_id)
+    if doc is None:
+        return None
+
+    chunk_ids = list(
+        (await db.execute(select(Chunk.id).where(Chunk.doc_id == doc_id)))
+        .scalars()
+        .all()
+    )
+
+    if chunk_ids:
+        store = FaissStore(settings.faiss_index_file, dim=dimension())
+        store.remove(chunk_ids)
+        store.save()
+
+    file_path = Path(doc.path)
+    await db.delete(doc)  # chunk / citation 由外键 ON DELETE CASCADE 清掉
+    await db.commit()
+
+    # 只删上传目录里的文件；命令行直接入库的外部 PDF 不要动
+    file_removed = False
+    if remove_file:
+        try:
+            if file_path.exists() and settings.upload_path in file_path.parents:
+                file_path.unlink()
+                file_removed = True
+        except OSError:
+            pass
+
+    return {
+        "doc_id": doc_id,
+        "chunks": len(chunk_ids),
+        "vectors": len(chunk_ids),
+        "file_removed": file_removed,
+    }
 
 
 async def _main() -> None:

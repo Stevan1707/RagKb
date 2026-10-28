@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health
+from app.api import health, docs
 from app.config import settings
 
 
@@ -22,6 +22,9 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router, prefix=settings.api_prefix)
+
+    app.include_router(docs.router, prefix=settings.api_prefix)
+
     return app
 
 
@@ -30,6 +33,7 @@ app = create_app()
 @app.get("/")
 async def hello():
     return {"msg": "helloworld"}
+
 
 if __name__ == "__main__":
     import uvicorn
