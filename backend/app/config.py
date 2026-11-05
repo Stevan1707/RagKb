@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     # 思考型模型（qwen3 系列等）会先输出一大段推理，正文可能被 max_tokens 挤空。
     # 设成 "none" 可以让 Ollama 跳过思考，直接给答案；换别的厂商时置空即可。
     llm_reasoning_effort: str = "none"
+    # 带几轮历史进 prompt；0 表示单轮问答（最省 token）
+    llm_history_turns: int = 1
 
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",

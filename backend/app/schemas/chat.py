@@ -1,0 +1,38 @@
+"""问答接口的请求 / 响应模型。"""
+
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+
+class ChatRequest(BaseModel):
+    """提问请求。"""
+
+    question: str = Field(min_length=1, max_length=500, description="你的问题")
+    conversation_id: int | None = Field(
+        default=None, description="不传则新建会话；传了就在该会话里继续"
+    )
+    top_k: int = Field(default=3, ge=1, le=10, description="喂给模型的资料条数")
+
+
+class SourceOut(BaseModel):
+    """答案引用的来源，rank 对应正文里的 [1][2]。"""
+
+    rank: int
+    chunk_id: int
+    doc_id: int
+    doc_name: str
+    page: int
+    content: str
+    score: float
+
+    @field_serializer("score")
+    def _round_score(self, value: float) -> float:
+        return round(value, 4)
+
+
+class ChatResponse(BaseModel):
+    """一次问答的结果。"""
+
+    conversation_id: int
+    message_id: int
+    answer: str
+    sources: list[SourceOut]
