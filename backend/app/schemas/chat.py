@@ -1,5 +1,7 @@
 """问答接口的请求 / 响应模型。"""
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
@@ -36,3 +38,38 @@ class ChatResponse(BaseModel):
     message_id: int
     answer: str
     sources: list[SourceOut]
+
+
+class ConversationOut(BaseModel):
+    """会话概要，用于侧栏列表。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    created_time: datetime
+    updated_time: datetime
+
+
+class ConversationListOut(BaseModel):
+    items: list[ConversationOut]
+
+
+class MessageOut(BaseModel):
+    """一条历史消息，assistant 的消息会带引用。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    role: str
+    content: str
+    status: str
+    created_time: datetime
+    sources: list[SourceOut] = Field(default_factory=list)
+
+
+class ConversationDetailOut(BaseModel):
+    """会话详情：会话信息 + 按时间顺序的全部消息。"""
+
+    conversation: ConversationOut
+    messages: list[MessageOut]

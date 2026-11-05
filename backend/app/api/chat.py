@@ -13,7 +13,7 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +22,15 @@ from app.db import get_database_session
 from app.generator import LLMError, build_messages, complete
 from app.models import Chunk, Citation, Conversation, Document, Message
 from app.retrieval import search as retrieve
-from app.schemas.chat import ChatRequest, ChatResponse, SourceOut
+from app.schemas.chat import (
+    ChatRequest,
+    ChatResponse,
+    ConversationDetailOut,
+    ConversationListOut,
+    ConversationOut,
+    MessageOut,
+    SourceOut,
+)
 
 router = APIRouter(tags=["chat"])
 
@@ -139,5 +147,101 @@ async def chat(
         sources=[
             SourceOut(rank=rank, **hit.to_dict())
             for rank, hit in enumerate(hits, start=1)
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# 读：会话列表 / 会话详情
+# ---------------------------------------------------------------------------
+
+
+@router.get("/conversations", response_model=ConversationListOut)
+async def list_conversations(
+    limit: int = Query(50, ge=1, le=200, description="最多返回多少个会话"),
+    db: AsyncSession = Depends(get_database_session),
+) -> ConversationListOut:
+    """会话列表，最近更新的排在前面（前端侧栏用）。"""
+    rows = (
+        (
+            await db.execute(
+                select(Conversation)
+                .order_by(Conversation.updated_time.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return ConversationListOut(
+        items=[ConversationOut.model_validate(row) for row in rows]
+    )
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationDetailOut)
+async def get_conversation(
+    conversation_id: int,
+    db: AsyncSession = Depends(get_database_session),
+) -> ConversationDetailOut:
+    """会话详情：按时间顺序返回全部消息，assistant 的消息带引用。
+
+    引用要从 citation 表 join 回 chunk 和 document，才能给出
+    「哪个文件、第几页、原文是什么」——这正是前端来源卡片需要的三样东西。
+    """
+    conversation = await db.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"会话不存在：{conversation_id}",
+        )
+
+    messages = (
+        (
+            await db.execute(
+                select(Message)
+                .where(Message.conversation_id == conversation_id)
+                .order_by(Message.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    sources_by_message: dict[int, list[SourceOut]] = {}
+    if messages:
+        rows = (
+            await db.execute(
+                select(Citation, Chunk, Document)
+                .join(Chunk, Chunk.id == Citation.chunk_id)
+                .join(Document, Document.id == Chunk.doc_id)
+                .where(Citation.message_id.in_([m.id for m in messages]))
+                .order_by(Citation.rank_no)
+            )
+        ).all()
+        for citation, chunk, document in rows:
+            sources_by_message.setdefault(citation.message_id, []).append(
+                SourceOut(
+                    rank=citation.rank_no,
+                    chunk_id=chunk.id,
+                    doc_id=document.id,
+                    doc_name=document.filename,
+                    page=chunk.page,
+                    content=chunk.content,
+                    score=citation.score or 0.0,
+                )
+            )
+
+    return ConversationDetailOut(
+        conversation=ConversationOut.model_validate(conversation),
+        messages=[
+            MessageOut(
+                id=m.id,
+                role=m.role,
+                content=m.content,
+                status=m.status,
+                created_time=m.created_time,
+                sources=sources_by_message.get(m.id, []),
+            )
+            for m in messages
         ],
     )
