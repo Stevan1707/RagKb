@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import docs, health, stats
+from app.api import docs, health, search, stats
 from app.config import settings
 
 
@@ -26,6 +26,8 @@ def create_app() -> FastAPI:
     app.include_router(docs.router, prefix=settings.api_prefix)
 
     app.include_router(stats.router, prefix=settings.api_prefix)
+
+    app.include_router(search.router, prefix=settings.api_prefix)
 
     return app
 
