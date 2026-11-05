@@ -16,7 +16,6 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
-from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,18 +23,20 @@ from app.config import settings
 from app.db import get_database_session
 from app.ingest.pipeline import ingest_file, remove_document
 from app.models import Chunk, Document
+from app.schemas.document import (
+    ChunkListOut,
+    DeleteResult,
+    DocumentListOut,
+    DocumentOut,
+    DocumentUpdate,
+    UploadResult,
+)
 
 router = APIRouter(prefix="/docs", tags=["docs"])
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 PDF_MAGIC = b"%PDF"
 DOC_STATUSES = ("pending", "processing", "done", "failed")
-
-
-class DocumentUpdate(BaseModel):
-    """PUT/PATCH 的请求体：目前只允许改展示名。"""
-
-    filename: str = Field(min_length=1, max_length=255, description="新的文件名（展示用）")
 
 
 # ---------------------------------------------------------------------------
@@ -52,18 +53,6 @@ def _unique_path(directory: Path, filename: str) -> Path:
         dest = directory / f"{stem}_{i}{suffix}"
         i += 1
     return dest
-
-
-def _doc_to_dict(doc: Document) -> dict:
-    """ORM 对象 → 可 JSON 序列化的字典（datetime 不能直接返回）。"""
-    return {
-        "id": doc.id,
-        "filename": doc.filename,
-        "status": doc.status,
-        "chunk_count": doc.chunk_count,
-        "error": doc.error,
-        "created_time": doc.created_time.isoformat(sep=" ", timespec="seconds"),
-    }
 
 
 def _chunk_to_dict(chunk: Chunk) -> dict:
@@ -91,11 +80,13 @@ async def _get_doc_or_404(db: AsyncSession, doc_id: int) -> Document:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/upload", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/upload", status_code=status.HTTP_201_CREATED, response_model=UploadResult
+)
 async def upload_document(
     file: UploadFile,
     db: AsyncSession = Depends(get_database_session),
-) -> dict:
+) -> UploadResult:
     """上传 PDF 并同步完成入库，返回 doc_id、块数与索引总向量数。
 
     现在是同步的：请求会等到解析、切块、向量化全部跑完才返回。
@@ -148,13 +139,13 @@ async def upload_document(
             },
         ) from exc
 
-    return {
-        "doc_id": result["doc_id"],
-        "filename": dest.name,
-        "status": "done",
-        "chunks": result["chunks"],
-        "vectors": result["vectors"],  # 索引里的总向量数，不是本次新增数
-    }
+    return UploadResult(
+        doc_id=result["doc_id"],
+        filename=dest.name,
+        status="done",
+        chunks=result["chunks"],
+        vectors=result["vectors"],  # 索引里的总向量数，不是本次新增数
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +153,7 @@ async def upload_document(
 # ---------------------------------------------------------------------------
 
 
-@router.get("")
+@router.get("", response_model=DocumentListOut)
 async def list_documents(
     doc_status: str | None = Query(
         None,
@@ -173,7 +164,7 @@ async def list_documents(
     page: int = Query(1, ge=1, description="页码，从 1 开始"),
     page_size: int = Query(20, ge=1, le=100, description="每页条数"),
     db: AsyncSession = Depends(get_database_session),
-) -> dict:
+) -> DocumentListOut:
     """文档列表，按 id 倒序（最新上传的在前）。"""
     if doc_status is not None and doc_status not in DOC_STATUSES:
         raise HTTPException(
@@ -203,32 +194,31 @@ async def list_documents(
         .all()
     )
 
-    return {
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "items": [_doc_to_dict(doc) for doc in rows],
-    }
+    return DocumentListOut(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=[DocumentOut.model_validate(doc) for doc in rows],
+    )
 
 
-@router.get("/{doc_id}")
+@router.get("/{doc_id}", response_model=DocumentOut)
 async def get_document(
     doc_id: int,
     db: AsyncSession = Depends(get_database_session),
-) -> dict:
+) -> DocumentOut:
     """单个文档详情（前端轮询处理状态也用这个）。"""
-    doc = await _get_doc_or_404(db, doc_id)
-    return _doc_to_dict(doc)
+    return await _get_doc_or_404(db, doc_id)
 
 
-@router.get("/{doc_id}/chunks")
+@router.get("/{doc_id}/chunks", response_model=ChunkListOut)
 async def list_document_chunks(
     doc_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     with_content: bool = Query(True, description="false 时只返回元信息，不返回正文"),
     db: AsyncSession = Depends(get_database_session),
-) -> dict:
+) -> ChunkListOut:
     """查看某个文档切出来的块，按 seq 升序。
 
     调 CHUNK_SIZE / CHUNK_OVERLAP 时，用它看块边界切得是否合理。
@@ -262,13 +252,13 @@ async def list_document_chunks(
             item.pop("content")
         items.append(item)
 
-    return {
-        "doc_id": doc_id,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "items": items,
-    }
+    return ChunkListOut(
+        doc_id=doc_id,
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=items,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -276,12 +266,12 @@ async def list_document_chunks(
 # ---------------------------------------------------------------------------
 
 
-@router.patch("/{doc_id}")
+@router.patch("/{doc_id}", response_model=DocumentOut)
 async def update_document(
     doc_id: int,
     payload: DocumentUpdate,
     db: AsyncSession = Depends(get_database_session),
-) -> dict:
+) -> DocumentOut:
     """改文件名（展示名）。
 
     只改数据库里的 filename，磁盘上的 path 不变，所以不会影响已入库的块和向量。
@@ -297,7 +287,7 @@ async def update_document(
 
     doc.filename = new_name
     await db.commit()
-    return _doc_to_dict(doc)
+    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -305,11 +295,11 @@ async def update_document(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/{doc_id}")
+@router.delete("/{doc_id}", response_model=DeleteResult)
 async def delete_document(
     doc_id: int,
     remove_file: bool = Query(True, description="是否同时删除磁盘上的原始 PDF"),
-) -> dict:
+) -> DeleteResult:
     """删除文档：向量、数据行、磁盘文件一起清。
 
     具体怎么删（顺序、回滚、孤儿向量）都在 pipeline.remove_document() 里，
@@ -328,9 +318,9 @@ async def delete_document(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"文档不存在：{doc_id}"
         )
 
-    return {
-        "doc_id": doc_id,
-        "deleted": True,
-        "removed_vectors": result["vectors"],
-        "file_removed": result["file_removed"],
-    }
+    return DeleteResult(
+        doc_id=doc_id,
+        deleted=True,
+        removed_vectors=result["vectors"],
+        file_removed=result["file_removed"],
+    )
