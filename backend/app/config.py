@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     upload_dir: str = "data/uploads"
     faiss_index_path: str = "data/faiss.index"
 
+    # 大模型：任意 OpenAI 兼容接口（Ollama / DeepSeek / 通义 / Kimi）
+    # 用 Ollama 时 key 随便填，Ollama 不校验
+    llm_base_url: str = "http://127.0.0.1:11434/v1"
+    llm_api_key: str = "ollama"
+    llm_model: str = "qwen3.5:latest"
+    llm_temperature: float = 0.3
+    llm_max_tokens: int = 400
+    llm_timeout: float = 120.0
+    # 思考型模型（qwen3 系列等）会先输出一大段推理，正文可能被 max_tokens 挤空。
+    # 设成 "none" 可以让 Ollama 跳过思考，直接给答案；换别的厂商时置空即可。
+    llm_reasoning_effort: str = "none"
+
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",
         env_file_encoding="utf-8",
@@ -71,6 +83,11 @@ class Settings(BaseSettings):
         p = Path(self.embed_model)
         candidate = p if p.is_absolute() else ROOT_DIR / p
         return str(candidate) if candidate.exists() else self.embed_model
+
+    @property
+    def llm_chat_url(self) -> str:
+        """OpenAI 兼容的对话补全地址，例如 http://127.0.0.1:11434/v1/chat/completions"""
+        return self.llm_base_url.rstrip("/") + "/chat/completions"
 
 @lru_cache
 def get_settings() -> Settings:
