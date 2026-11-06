@@ -53,11 +53,13 @@ async def _ingest(src: Path, db: AsyncSession) -> dict:
     added_ids: list[int] = []
 
     try:
-        pages = loader.load_document(src)
-        if not pages:
+        loaded = loader.load_document(src)
+        if not loaded.pages:
             raise ValueError("未抽取到任何文字（扫描版 PDF 或空文档）")
 
-        blocks = splitter.split_pages(pages, settings.chunk_size, settings.chunk_overlap)
+        blocks = splitter.split_pages(
+            loaded.pages, settings.chunk_size, settings.chunk_overlap
+        )
         if not blocks:
             raise ValueError("切块结果为空")
 
@@ -77,11 +79,21 @@ async def _ingest(src: Path, db: AsyncSession) -> dict:
         await db.execute(
             update(Document)
             .where(Document.id == doc_id)
-            .values(status="done", chunk_count=len(chunk_ids), error=None)
+            .values(
+                status="done",
+                chunk_count=len(chunk_ids),
+                ocr_pages=loaded.ocr_pages,
+                error=None,
+            )
         )
         await db.commit()
 
-        return {"doc_id": doc_id, "chunks": len(chunk_ids), "vectors": store.ntotal}
+        return {
+            "doc_id": doc_id,
+            "chunks": len(chunk_ids),
+            "vectors": store.ntotal,
+            "ocr_pages": loaded.ocr_pages,
+        }
 
     except Exception as exc:
         # 回滚两处写入：MySQL 块 + FAISS 向量，并把失败原因留在文档行上。

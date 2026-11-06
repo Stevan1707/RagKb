@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     # 带几轮历史进 prompt；0 表示单轮问答（最省 token）
     llm_history_turns: int = 1
 
+    # OCR（扫描版 PDF / 图片）：需要可选依赖 rapidocr-onnxruntime
+    ocr_enabled: bool = True
+    ocr_dpi: int = 200          # PDF 转图片的分辨率，越高越准也越慢
+    ocr_max_pages: int = 30     # 单份文档最多 OCR 多少页，防止一份几百页扫描件跑十分钟
+    ocr_min_score: float = 0.5  # 低于这个置信度的识别结果直接丢弃，减少乱码
+
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",
         env_file_encoding="utf-8",
