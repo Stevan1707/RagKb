@@ -53,9 +53,9 @@ async def _ingest(src: Path, db: AsyncSession) -> dict:
     added_ids: list[int] = []
 
     try:
-        pages = loader.load_pdf(src)
+        pages = loader.load_document(src)
         if not pages:
-            raise ValueError("未抽取到任何文字，可能是扫描版 PDF")
+            raise ValueError("未抽取到任何文字（扫描版 PDF 或空文档）")
 
         blocks = splitter.split_pages(pages, settings.chunk_size, settings.chunk_overlap)
         if not blocks:
