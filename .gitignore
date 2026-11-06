@@ -1,2 +1,6 @@
 
 docs/
+
+# 本地 Ollama 模型配置与临时请求体
+Modelfile
+q.json
