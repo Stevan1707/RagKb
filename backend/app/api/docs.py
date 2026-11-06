@@ -38,6 +38,8 @@ router = APIRouter(prefix="/docs", tags=["docs"])
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 PDF_MAGIC = b"%PDF"
 ZIP_MAGIC = b"PK\x03\x04"  # docx 本质是 zip，用它挡掉改名的假文件
+PNG_MAGIC = b"\x89PNG"
+JPEG_MAGIC = b"\xff\xd8\xff"
 DOC_STATUSES = ("pending", "processing", "done", "failed")
 
 
@@ -122,6 +124,14 @@ async def upload_document(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="不是有效的 Word 文档"
         )
+    if suffix == ".png" and not data.startswith(PNG_MAGIC):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="不是有效的 PNG 图片"
+        )
+    if suffix in (".jpg", ".jpeg") and not data.startswith(JPEG_MAGIC):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="不是有效的 JPEG 图片"
+        )
 
     upload_dir = settings.upload_path
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -155,6 +165,7 @@ async def upload_document(
         status="done",
         chunks=result["chunks"],
         vectors=result["vectors"],  # 索引里的总向量数，不是本次新增数
+        ocr_pages=result["ocr_pages"],
     )
 
 

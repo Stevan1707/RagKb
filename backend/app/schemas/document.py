@@ -18,6 +18,7 @@ class DocumentOut(BaseModel):
     filename: str
     status: str = Field(description="pending / processing / done / failed")
     chunk_count: int = Field(description="切出的块数")
+    ocr_pages: int = Field(default=0, description="其中多少页由 OCR 文字识别得到")
     error: str | None = Field(default=None, description="失败原因")
     created_time: datetime
 
@@ -68,6 +69,7 @@ class UploadResult(BaseModel):
     status: str
     chunks: int = Field(description="本次切出的块数")
     vectors: int = Field(description="FAISS 索引里的总向量数，不是本次新增数")
+    ocr_pages: int = Field(default=0, description="其中多少页由 OCR 文字识别得到")
 
 
 class DeleteResult(BaseModel):
