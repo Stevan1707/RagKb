@@ -84,11 +84,16 @@ async def _ingest(src: Path, db: AsyncSession) -> dict:
         return {"doc_id": doc_id, "chunks": len(chunk_ids), "vectors": store.ntotal}
 
     except Exception as exc:
-        # 回滚两处写入：FAISS 向量 + MySQL 块，并把失败原因留在文档行上
-        if added_ids:
-            store.remove(added_ids)
-            store.save()
+        # 回滚两处写入：MySQL 块 + FAISS 向量，并把失败原因留在文档行上。
+        # 顺序和 try 里相反（先数据库再向量），且向量回滚单独兜底：
+        # 索引不可写时也不能让文档状态卡在 processing。
         await db.rollback()
+        if added_ids:
+            try:
+                store.remove(added_ids)
+                store.save()
+            except Exception:
+                pass
         await db.execute(delete(Chunk).where(Chunk.doc_id == doc_id))
         await db.execute(
             update(Document)
