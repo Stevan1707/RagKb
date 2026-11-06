@@ -4,3 +4,6 @@ docs/
 # 本地 Ollama 模型配置与临时请求体
 Modelfile
 q.json
+
+# 换环境时临时拷贝的运行数据，确认无误后可删
+data_backup/
