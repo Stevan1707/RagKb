@@ -13,7 +13,7 @@ const dragging = ref(false)
 const localError = ref('')
 
 const MAX_MB = 50
-const ACCEPTED = ['.pdf', '.txt', '.md', '.docx']
+const ACCEPTED = ['.pdf', '.txt', '.md', '.docx', '.png', '.jpg', '.jpeg']
 
 function pick() {
   if (props.uploading) return
@@ -74,7 +74,7 @@ function onDrop(event) {
     <template v-else>
       <div class="icon">＋</div>
       <div class="title">点击或把文档拖到这里</div>
-      <p class="desc">支持 PDF / Word / txt / Markdown，单文件 ≤ {{ MAX_MB }}MB</p>
+      <p class="desc">支持 PDF / Word / 文本 / 图片，单文件 ≤ {{ MAX_MB }}MB</p>
     </template>
 
     <p v-if="localError" class="error">{{ localError }}</p>
