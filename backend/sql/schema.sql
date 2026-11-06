@@ -12,6 +12,7 @@ CREATE TABLE document (
   path         VARCHAR(500) NOT NULL COMMENT '落盘路径',
   status       VARCHAR(20)  NOT NULL DEFAULT 'pending' COMMENT 'pending/processing/done/failed',
   chunk_count  INT          NOT NULL DEFAULT 0 COMMENT '切出的块数',
+  ocr_pages    INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '其中多少页由 OCR 文字识别得到',
   error        VARCHAR(500) DEFAULT NULL COMMENT '失败原因',
   created_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
