@@ -3,7 +3,7 @@
 另外多给一个「查看切块」的接口：调 CHUNK_SIZE 时靠它判断切得好不好。
 
 路由一览：
-    POST   /docs/upload            上传 PDF，同步完成入库
+    POST   /docs/upload            上传文档（pdf/txt/md/docx），同步完成入库
     GET    /docs                   分页列表，可按状态、文件名筛选
     GET    /docs/{doc_id}          单个文档详情
     PATCH  /docs/{doc_id}          改名（只改展示名，不动磁盘文件）
@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import get_database_session
+from app.ingest.loader import SUPPORTED_EXTENSIONS
 from app.ingest.pipeline import ingest_file, remove_document
 from app.models import Chunk, Document
 from app.schemas.document import (
@@ -36,6 +37,7 @@ router = APIRouter(prefix="/docs", tags=["docs"])
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 PDF_MAGIC = b"%PDF"
+ZIP_MAGIC = b"PK\x03\x04"  # docx 本质是 zip，用它挡掉改名的假文件
 DOC_STATUSES = ("pending", "processing", "done", "failed")
 
 
@@ -87,15 +89,17 @@ async def upload_document(
     file: UploadFile,
     db: AsyncSession = Depends(get_database_session),
 ) -> UploadResult:
-    """上传 PDF 并同步完成入库，返回 doc_id、块数与索引总向量数。
+    """上传文档并同步完成入库，返回 doc_id、块数与索引总向量数。
 
+    支持 pdf / txt / md / docx；按扩展名交给 loader.load_document 分派。
     现在是同步的：请求会等到解析、切块、向量化全部跑完才返回。
-    几十页的 PDF 大约要十几秒；改成后台任务见第 2 步的 2.5。
     """
     filename = Path(file.filename or "").name  # 只取文件名，丢掉客户端传来的目录部分
-    if not filename.lower().endswith(".pdf"):
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="只支持 PDF 文件"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"只支持 {', '.join(sorted(SUPPORTED_EXTENSIONS))} 文件",
         )
 
     data = await file.read()
@@ -108,9 +112,15 @@ async def upload_document(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"文件超过 {MAX_UPLOAD_BYTES // 1024 // 1024}MB",
         )
-    if not data.startswith(PDF_MAGIC):
+
+    # 只给二进制格式做魔数校验：txt / md 是纯文本，没有固定文件头
+    if suffix == ".pdf" and not data.startswith(PDF_MAGIC):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="不是有效的 PDF 文件"
+        )
+    if suffix == ".docx" and not data.startswith(ZIP_MAGIC):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="不是有效的 Word 文档"
         )
 
     upload_dir = settings.upload_path
