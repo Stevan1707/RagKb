@@ -46,7 +46,7 @@ onUnmounted(() => docs.stopPolling())
     <header class="head">
       <div>
         <h1>文档库</h1>
-        <p class="sub">上传 PDF 后会解析、切块、向量化；处理完就能在对话里检索到。</p>
+        <p class="sub">上传 PDF / Word / 文本后会自动解析、切块、向量化；处理完就能在对话里检索到。</p>
       </div>
       <button class="ghost" :disabled="docs.loading" @click="docs.load()">
         {{ docs.loading ? '刷新中…' : '刷新' }}

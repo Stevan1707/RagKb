@@ -13,6 +13,7 @@ const dragging = ref(false)
 const localError = ref('')
 
 const MAX_MB = 50
+const ACCEPTED = ['.pdf', '.txt', '.md', '.docx']
 
 function pick() {
   if (props.uploading) return
@@ -21,7 +22,11 @@ function pick() {
 
 function validate(file) {
   if (!file) return '没有选择文件'
-  if (!file.name.toLowerCase().endsWith('.pdf')) return '目前只支持 PDF'
+
+  const dot = file.name.lastIndexOf('.')
+  const suffix = dot === -1 ? '' : file.name.slice(dot).toLowerCase()
+  if (!ACCEPTED.includes(suffix)) return `只支持 ${ACCEPTED.join(' / ')}`
+
   if (file.size > MAX_MB * 1024 * 1024) return `文件超过 ${MAX_MB}MB`
   return ''
 }
@@ -53,7 +58,13 @@ function onDrop(event) {
     @dragleave.prevent="dragging = false"
     @drop.prevent="onDrop"
   >
-    <input ref="inputEl" type="file" accept="application/pdf,.pdf" hidden @change="onChange" />
+    <input
+      ref="inputEl"
+      type="file"
+      :accept="ACCEPTED.join(',')"
+      hidden
+      @change="onChange"
+    />
 
     <template v-if="uploading">
       <div class="title">正在上传… {{ progress }}%</div>
@@ -62,8 +73,8 @@ function onDrop(event) {
     </template>
     <template v-else>
       <div class="icon">＋</div>
-      <div class="title">点击或把 PDF 拖到这里</div>
-      <p class="desc">单文件 ≤ {{ MAX_MB }}MB，入库完成后就能在对话里检索到</p>
+      <div class="title">点击或把文档拖到这里</div>
+      <p class="desc">支持 PDF / Word / txt / Markdown，单文件 ≤ {{ MAX_MB }}MB</p>
     </template>
 
     <p v-if="localError" class="error">{{ localError }}</p>
