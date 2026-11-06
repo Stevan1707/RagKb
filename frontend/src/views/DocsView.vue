@@ -91,6 +91,13 @@ onUnmounted(() => docs.stopPolling())
           <span class="chip" :class="doc.status">
             {{ STATUS_TEXT[doc.status] || doc.status }}
           </span>
+          <span
+            v-if="doc.ocr_pages > 0"
+            class="ocr"
+            :title="`其中 ${doc.ocr_pages} 页没有文字层，内容由 OCR 文字识别得到`"
+          >
+            OCR {{ doc.ocr_pages }} 页
+          </span>
           <span v-if="doc.error" class="reason" :title="doc.error">查看原因</span>
         </span>
         <span class="num">{{ doc.chunk_count }}</span>
@@ -259,6 +266,16 @@ h1 {
   margin-left: 6px;
   font-size: 11.5px;
   color: #b91c1c;
+  cursor: help;
+}
+
+.ocr {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  background: #f5f3ff;
+  color: #6d28d9;
   cursor: help;
 }
 
