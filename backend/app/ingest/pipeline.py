@@ -21,6 +21,7 @@ from app.db import AsyncSessionLocal, async_engine
 from app.ingest import loader, splitter
 from app.ingest.embedder import dimension, encode_passages
 from app.models import Chunk, Document
+from app.retrieval import invalidate_bm25
 from app.vectorstore import FaissStore
 
 
@@ -88,6 +89,9 @@ async def _ingest(src: Path, db: AsyncSession) -> dict:
         )
         await db.commit()
 
+        # 新块进来了，BM25 的内存索引作废，下次检索时重建
+        invalidate_bm25()
+
         return {
             "doc_id": doc_id,
             "chunks": len(chunk_ids),
@@ -154,6 +158,9 @@ async def _remove(db: AsyncSession, doc_id: int, remove_file: bool) -> dict | No
     file_path = Path(doc.path)
     await db.delete(doc)  # chunk / citation 由外键 ON DELETE CASCADE 清掉
     await db.commit()
+
+    # 块被删了，BM25 索引作废
+    invalidate_bm25()
 
     # 只删上传目录里的文件；命令行直接入库的外部 PDF 不要动
     file_removed = False

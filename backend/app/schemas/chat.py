@@ -13,6 +13,10 @@ class ChatRequest(BaseModel):
         default=None, description="不传则新建会话；传了就在该会话里继续"
     )
     top_k: int = Field(default=3, ge=1, le=10, description="喂给模型的资料条数")
+    mode: str | None = Field(
+        default=None,
+        description="检索模式：hybrid（默认）/ vector / bm25，不传则用配置里的默认值",
+    )
 
 
 class SourceOut(BaseModel):

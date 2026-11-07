@@ -1,24 +1,32 @@
 """查询侧入口：问题 → 片段。
 
-这一步只做「向量召回」一条路：
-    问题文字 → encode_query → (1, 512) 向量
-    → FAISS 找最相近的 top_k 个 chunk.id
-    → 按这些 id 回 MySQL 取原文、页码、文档名
+两路召回 + RRF 融合：
 
-为什么非要回表：FAISS 里只有向量，没有文字。文字的唯一真相存放在 MySQL，
-这样即使索引重建、向量删改，也不会出现「两份文字对不上」的问题。
+    vector：encode_query → FAISS 找 recall_k 个 → 语义相近
+    bm25  ：字面匹配 → 精确命中编号、人名、型号
+    融合  ：RRF 只看名次，合并成 top_k
+
+mode 可选 hybrid（默认）/ vector / bm25，方便对比与排查。
+
+BM25 的语料来自 MySQL，不依赖 FAISS；入库或删除后调用 invalidate_bm25()，
+下一次检索会自动重建，避免每次查询都重新分词。
 """
 
 import asyncio
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bm25 import BM25Index
 from app.config import settings
+from app.fusion import rrf
 from app.ingest.embedder import encode_query
 from app.models import Chunk, Document
 from app.vectorstore import FaissStore
+
+MODES = ("hybrid", "vector", "bm25")
 
 
 @dataclass
@@ -31,6 +39,7 @@ class Hit:
     page: int
     content: str
     score: float
+    sources: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -43,31 +52,66 @@ class Hit:
         }
 
 
-async def search(
-    db: AsyncSession,
-    query: str,
-    top_k: int | None = None,
-) -> list[Hit]:
-    """按语义相似度取回最相关的片段，按相关度从高到低。"""
-    query = (query or "").strip()
-    if not query:
-        return []
+# ---------------------------------------------------------------------------
+# BM25 索引的缓存与失效
+# ---------------------------------------------------------------------------
 
-    top_k = top_k or settings.top_k
+_bm25: BM25Index | None = None
+_bm25_version = 0          # 每次入库/删除 +1
+_bm25_built_version = -1   # 当前内存索引对应的版本
+_bm25_lock = asyncio.Lock()
 
-    # 编码是 CPU 密集操作，丢到线程池，别堵住事件循环
-    vector = await asyncio.to_thread(encode_query, query)
 
-    def _vector_search() -> tuple[list[int], list[float]]:
-        # FaissStore 每次都会从磁盘读一份索引；维度直接用向量的列数，省一次模型调用
-        store = FaissStore(settings.faiss_index_file, dim=vector.shape[1])
-        return store.search(vector, top_k)
+def invalidate_bm25() -> None:
+    """入库或删除后调用：打版本号，等下次检索再重建。"""
+    global _bm25_version
+    _bm25_version += 1
 
-    ids, scores = await asyncio.to_thread(_vector_search)
-    if not ids:
-        return []
 
-    # 回表：一次 IN 查询取回所有原文
+async def _get_bm25(db: AsyncSession) -> BM25Index:
+    global _bm25, _bm25_built_version
+    if _bm25 is not None and _bm25_built_version == _bm25_version:
+        return _bm25
+
+    async with _bm25_lock:
+        if _bm25 is not None and _bm25_built_version == _bm25_version:
+            return _bm25
+
+        rows = (await db.execute(select(Chunk.id, Chunk.content))).all()
+        index = BM25Index(settings.bm25_k1, settings.bm25_b)
+        await asyncio.to_thread(index.build, [(row[0], row[1]) for row in rows])
+        _bm25 = index
+        _bm25_built_version = _bm25_version
+        return index
+
+
+# ---------------------------------------------------------------------------
+# 两路召回
+# ---------------------------------------------------------------------------
+
+
+def _vector_search_sync(query: str, k: int) -> list[tuple[int, float]]:
+    vector = encode_query(query)
+    store = FaissStore(settings.faiss_index_file, dim=vector.shape[1])
+    ids, scores = store.search(vector, k)
+    return list(zip(ids, scores))
+
+
+async def _vector_candidates(query: str, k: int) -> list[tuple[int, float]]:
+    return await asyncio.to_thread(_vector_search_sync, query, k)
+
+
+async def _bm25_candidates(
+    db: AsyncSession, query: str, k: int
+) -> list[tuple[int, float]]:
+    index = await _get_bm25(db)
+    return await asyncio.to_thread(index.search, query, k)
+
+
+async def _hydrate(db: AsyncSession, chunk_ids: list[int]) -> dict[int, dict]:
+    """按 id 回 MySQL 取原文、页码、文档名。"""
+    if not chunk_ids:
+        return {}
     rows = (
         await db.execute(
             select(
@@ -78,27 +122,77 @@ async def search(
                 Document.filename,
             )
             .join(Document, Document.id == Chunk.doc_id)
-            .where(Chunk.id.in_(ids))
+            .where(Chunk.id.in_(chunk_ids))
         )
     ).all()
-    by_id = {row[0]: row for row in rows}
+    return {
+        row[0]: {
+            "chunk_id": row[0],
+            "doc_id": row[1],
+            "page": row[2],
+            "content": row[3],
+            "doc_name": row[4],
+        }
+        for row in rows
+    }
 
-    # 按 FAISS 的排名组装，不能用 IN 查询返回的顺序
-    hits: list[Hit] = []
-    for chunk_id, score in zip(ids, scores):
-        row = by_id.get(chunk_id)
+
+# ---------------------------------------------------------------------------
+# 对外入口
+# ---------------------------------------------------------------------------
+
+
+async def search(
+    db: AsyncSession,
+    query: str,
+    *,
+    mode: str | None = None,
+    top_k: int | None = None,
+    recall_k: int | None = None,
+) -> list[Hit]:
+    """检索并返回 top_k 条。"""
+    query = (query or "").strip()
+    if not query:
+        return []
+
+    mode = (mode or settings.retrieval_mode).lower()
+    if mode not in MODES:
+        raise ValueError(f"mode 只能是 {', '.join(MODES)}")
+
+    top_k = top_k or settings.top_k
+    recall_k = recall_k or settings.recall_k
+
+    candidates: dict[str, list[tuple[int, float]]] = {}
+    if mode in ("vector", "hybrid"):
+        candidates["vector"] = await _vector_candidates(query, recall_k)
+    if mode in ("bm25", "hybrid"):
+        candidates["bm25"] = await _bm25_candidates(db, query, recall_k)
+
+    if mode == "hybrid":
+        rankings = {
+            name: [chunk_id for chunk_id, _ in items]
+            for name, items in candidates.items()
+        }
+        fused = rrf(rankings, settings.rrf_k)[:top_k]
+        payload = await _hydrate(db, [item["chunk_id"] for item in fused])
+
+        hits: list[Hit] = []
+        for item in fused:
+            row = payload.get(item["chunk_id"])
+            if row is None:
+                # 索引里有、数据库里没有：两库不同步，跳过脏数据
+                continue
+            hits.append(Hit(**row, score=item["score"], sources=item["sources"]))
+        return hits
+
+    # 单路：保留原始分数
+    items = candidates[mode][:top_k]
+    payload = await _hydrate(db, [chunk_id for chunk_id, _ in items])
+
+    hits = []
+    for chunk_id, score in items:
+        row = payload.get(chunk_id)
         if row is None:
-            # 索引里有、数据库里没有：两库不同步（入库中途失败或删除不干净）
-            # 直接跳过，别让检索因为一条脏数据整体失败
             continue
-        hits.append(
-            Hit(
-                chunk_id=row[0],
-                doc_id=row[1],
-                page=row[2],
-                content=row[3],
-                doc_name=row[4],
-                score=score,
-            )
-        )
+        hits.append(Hit(**row, score=score, sources=[mode]))
     return hits

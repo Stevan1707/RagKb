@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     upload_dir: str = "data/uploads"
     faiss_index_path: str = "data/faiss.index"
 
+    # 检索策略：hybrid = 向量 + BM25 用 RRF 融合；vector / bm25 = 只走一路
+    retrieval_mode: str = "hybrid"
+    recall_k: int = 20      # 每路召回的候选数，融合后再截断到 top_k
+    rrf_k: int = 60         # RRF 的平滑常数
+    bm25_k1: float = 1.5    # 词频饱和速度
+    bm25_b: float = 0.75    # 文档长度归一化强度
+
     # 大模型：任意 OpenAI 兼容接口（Ollama / DeepSeek / 通义 / Kimi）
     # 用 Ollama 时 key 随便填，Ollama 不校验
     llm_base_url: str = "http://127.0.0.1:11434/v1"

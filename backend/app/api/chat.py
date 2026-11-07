@@ -21,6 +21,7 @@ from app.config import settings
 from app.db import get_database_session
 from app.generator import LLMError, build_messages, complete
 from app.models import Chunk, Citation, Conversation, Document, Message
+from app.retrieval import MODES
 from app.retrieval import search as retrieve
 from app.schemas.chat import (
     ChatRequest,
@@ -71,6 +72,14 @@ async def chat(
     db: AsyncSession = Depends(get_database_session),
 ) -> ChatResponse:
     """问一个问题，返回带引用的答案。"""
+    # 0. 校验检索模式（放在写库之前，坏请求不留垃圾数据）
+    mode = (payload.mode or "").lower() or None
+    if mode is not None and mode not in MODES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"mode 只能是 {', '.join(MODES)}",
+        )
+
     # 1. 会话
     if payload.conversation_id is not None:
         conversation = await db.get(Conversation, payload.conversation_id)
@@ -101,7 +110,7 @@ async def chat(
     await db.commit()
 
     # 3. 检索
-    hits = await retrieve(db, payload.question, top_k=payload.top_k)
+    hits = await retrieve(db, payload.question, mode=mode, top_k=payload.top_k)
 
     # 4. 生成（没检索到就不调模型）
     if hits:

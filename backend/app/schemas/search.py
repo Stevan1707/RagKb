@@ -13,7 +13,12 @@ class SearchHit(BaseModel):
     doc_name: str
     page: int
     content: str
-    score: float = Field(description="余弦相似度，0~1，越大越相关")
+    score: float = Field(
+        description="hybrid 下是 RRF 融合分，vector 下是余弦相似度，bm25 下是 BM25 分；不同模式不可直接比较"
+    )
+    sources: list[str] = Field(
+        default_factory=list, description="这条结果来自哪几路召回，如 ['vector', 'bm25']"
+    )
 
     @field_serializer("score")
     def _round_score(self, value: float) -> float:
@@ -25,5 +30,6 @@ class SearchResult(BaseModel):
     """检索接口的整体响应。"""
 
     query: str
+    mode: str
     total: int
     hits: list[SearchHit]
